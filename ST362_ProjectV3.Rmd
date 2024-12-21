@@ -1,0 +1,256 @@
+---
+title: "ST362-ProjectV2"
+output: html_document
+date: "2024-12-01"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+```{r}
+library(ISLR)
+library(leaps)
+library(car)
+Crime <- read.csv("ConvertedCrimeData.csv")
+Crime <- na.omit(Crime) #cleans out the na values 
+head(Crime)
+
+Crime$S <- C(factor(Crime$S),contr.sum) #factor the categorical variable S
+
+full_lm <- lm(R~.,data=Crime) # full lm with all variables
+
+vif(full_lm) #shows that there is a high correlation between Ex0 and Ex1
+Crime <- Crime[, !(colnames(Crime) %in% "Ex1")] # removes Ex1 column 
+
+```
+```{r}
+all_subsets <- regsubsets(R ~ .,Crime, nvmax = ncol(Crime[,2:13]))
+summary_all <- summary(all_subsets)
+names(summary_all) # We will be using "rsq"    "rss"    "adjr2"  "cp"     "bic" to select our variables.
+```
+
+## R^2, residual sum of square and Adjusted R^2 methods
+```{r}
+plot(summary_all$rsq, xlab="# of variables",ylab="R^2",type='l') # we need to maximize this
+plot(summary_all$rss, xlab="# of variables",ylab="RSS",type='l') # we need to minimize it
+plot(summary_all$adjr2, xlab="# of variables",ylab="Adjusteed R^2",type='l')
+which.max(summary_all$adjr2)
+points(8,summary_all$adjr2[8],col="blue")
+
+
+# so from this, we know that we have to use 8 or 9 variables to build model
+```
+##Mallows Cp method
+```{r}
+which.min(summary_all$cp) # 6 variables according to Cp
+plot(summary_all$cp,xlab="# of variables",ylab="Cp",type='l')
+points(6,summary_all$cp[6],col="blue")
+```
+#BIC method
+```{r}
+which.min(summary_all$bic) # according to BIC, 5 variables
+plot(summary_all$bic,xlab="# of variables",ylab="BIC",type='l')
+points(5,summary_all$bic[5],col="blue")
+```
+#What variables are selected?
+```{r}
+#rss is not an option
+plot(all_subsets, scale="r2")
+plot(all_subsets, scale="adjr2")
+plot(all_subsets, scale="Cp")
+plot(all_subsets, scale="bic")
+coef(all_subsets,5) # only for bic
+```
+
+#forward
+```{r}
+result.leaps.fw <- regsubsets(R~.,data=Crime,nvmax = 13, method="forward")
+coef(result.leaps.fw, which.max(summary(result.leaps.fw)$rsq))
+coef(result.leaps.fw, which.max(summary(result.leaps.fw)$adjr2))
+coef(result.leaps.fw, which.min(summary(result.leaps.fw)$cp))
+# we found coef for bic above
+```
+#backward
+```{r}
+result.leaps.bw <- regsubsets(R~.,data=Crime,nvmax = 13, method="backward")
+coef(result.leaps.bw, which.max(summary(result.leaps.bw)$rsq))
+coef(result.leaps.bw, which.max(summary(result.leaps.bw)$adjr2))
+coef(result.leaps.bw, which.min(summary(result.leaps.bw)$cp)) # gave me 7 variables
+
+```
+##Fitting Models
+```{r}
+# We will mainly use variables that were selected from using adjr2(8), cp(6) , and bic(5) methods
+
+bic_lm <- lm(R~Age + Ed + Ex0  +  U2 + X, data= Crime) # forward and backward bic model, 5 variables
+cp_lm_fw <- lm(R~Age + Ed + Ex0 + U2 +W+ X, data= Crime)# forward cp model, 6 variables
+cp_lm_bw <- lm(R~Age + Ed + Ex0 + M +U1+U2+ X, data= Crime)# backward cp model, 7 variables
+adjr2_lm_fw <- lm(R~Age + Ed + Ex0  + LF + U1 + U2 +W + X, data= Crime)#forward adjr2 model, 8 variables
+adjr2_lm_bw <- lm(R~Age + Ed + Ex0+  M + U1 + U2 + W + X, data= Crime)#backward adjr2 model, 8 variables
+
+```
+
+##FIVE models
+```{r}
+summary(bic_lm)$adj.r.squared
+summary(cp_lm_fw)$adj.r.squared
+summary(cp_lm_bw)$adj.r.squared
+summary(adjr2_lm_fw)$adj.r.squared
+summary(adjr2_lm_bw)$adj.r.squared
+
+anova(bic_lm,cp_lm_fw,cp_lm_bw,adjr2_lm_fw,adjr2_lm_bw)
+# the additional variables don't seem to provide significant improvements
+# so lets use the lm with least variables, which is bic_lm
+```
+##some plots
+```{r}
+par(mfrow=c(2,2))
+plot(bic_lm)
+
+#Since they all look terrible, lets improve it
+```
+
+##box-cox
+```{r}
+#The function for box-cox is at the bottom of the r file
+library(MASS)
+BC <- boxcox(bic_lm) 
+ymax <- which.max(BC$y) 
+lambda <- BC$x[ymax]
+Crime$BC_R <- ((Crime$R)^lambda-1)/lambda
+
+#Only being applied to response variable R
+bic_lm_BC <- lm(BC_R~Age + Ed + Ex0  +  U2 + X, data= Crime) # 5 variables
+
+summary(bic_lm) #lm after variable selection
+summary(bic_lm_BC) #lm converting with box_cox
+#Although adjusted R^2 decreased, residual is much better now, so it improved
+```
+
+##BC plots
+```{r}
+par(mfrow=c(2,2))
+plot(bic_lm_BC)
+
+#well, it still look terrible, so we will remove some outliers
+```
+##Outliers using hatvalues
+```{r}
+HVAL <- hatvalues(bic_lm_BC)
+
+
+SLV <- sum(HVAL) #6
+
+#The SLV is equivalent to the number of parameters p+1 in the model (this is always the case).
+
+MLV <- SLV/nrow(Crime)
+
+
+HVAL > 3*MLV
+#well,  no observations are identified as having unusually high leverage
+# So we dont have to care about this part
+```
+##outliers using Residauls
+```{r}
+#differences between observed and predicted values.
+RES <- fitted.values(bic_lm_BC) - Crime$R
+
+#residuals divided by their standard deviation.
+INT_RES <- rstandard(bic_lm_BC) 
+
+EXT_RES <- rstudent(bic_lm_BC)
+
+residuals <- cbind(RES,INT_RES,EXT_RES)
+residuals_df <- as.data.frame(residuals) 
+
+#Potential outliers
+outliers <- residuals_df[abs(residuals_df$INT_RES) > 2 | abs(residuals_df$EXT_RES) > 2, ]
+outliers #potential outliers are observaton 11 and 22
+
+```
+##cook's distance
+```{r}
+# So are the outliers influence the model?
+
+CD <- cooks.distance(bic_lm_BC)
+
+RES_CD <- cbind(residuals,CD)
+
+RES_CD[which(rownames(RES_CD) == "11"),]
+RES_CD[which(rownames(RES_CD) == "22"),]
+
+
+#Cook's distance for points for all potential outliers are less than 1, which indicating that indicating that they are the outliers but not a influential points
+
+```
+##cook's distance plot
+```{r}
+plot(bic_lm_BC,6)
+```
+##new model without the potential outliers
+```{r}
+new_Crime <- Crime[!(rownames(Crime) %in% c("11", "22")), ] #removes 11th and 22nd observations
+new_lm_BC <- lm(BC_R~Age + Ed + Ex0  +  U2 + X,data=new_Crime)
+summary(new_lm_BC)
+#by removing those potential outliers
+#Residual decreased again, and adjusted R^2 went up ALOT. So this is good.
+
+# so new_lm_BC is the final linear model that variables were selected, and outliers were removed
+```
+##confirming that new_lm_BC is the final lm
+```{r}
+vif(new_lm_BC)
+# all numbers are below 10 or even below 5, which indicating that there is no Multicollinearity 
+par(mfrow=c(2,2))
+plot(new_lm_BC)
+```
+##some useful plots and data for out final linear model
+```{r}
+# These are just extra
+pairs(new_Crime[,!(colnames(new_Crime) %in% c("R", "BC_R"))]) #relations of predictors ONLY (no Y)
+
+plot(new_lm_BC,6) #Cooks distance of new_lm_BC
+
+fitted(new_lm_BC) # fitted values
+
+plot(new_Crime$BC_R, predict(new_lm_BC), 
+     xlab="Actual", ylab="Predicted", 
+     main="Predicted vs Actual")
+abline(a=0, b=1, col="red")
+#Compares predicted values to actual values.
+
+hist(residuals(new_lm_BC), 
+     main="Histogram of Residuals", 
+     xlab="Residuals")
+#Shows the distribution of residuals.
+
+
+library(caret)
+varImp(new_lm_BC)
+#Ranks predictors by their importance in the model.
+
+
+library(corrplot)
+corrplot(cor(new_Crime[c("BC_R", "Age", "Ed", "Ex0", "U2", "X")]), method="circle")
+#Visualizes the correlation between all variables in the model.
+```
+##Something for creativity
+```{r}
+#Since Y-values are different for all predictors, Y-axis tells us the distribution.
+#So this box-plot shows how distributed the observations of each predictors are.
+#ignore the actual values in y-axis due to difference in scale.
+
+library(ggplot2)
+library(tidyr)
+long_predictors <- pivot_longer(new_Crime, cols = c(Age, Ed, Ex0, U2, X), names_to = "Predictor", values_to = "Value")
+
+ggplot(long_predictors, aes(x = Predictor, y = Value)) +
+  geom_boxplot() +
+  labs(title = "Distribution of Predictor Variables",
+       x = "Predictor", y = "Value") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
